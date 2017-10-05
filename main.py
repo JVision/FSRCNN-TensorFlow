@@ -1,4 +1,4 @@
-from model import FSRCNN
+from model import Model
 
 import numpy as np
 import tensorflow as tf
@@ -7,6 +7,7 @@ import pprint
 import os
 
 flags = tf.app.flags
+flags.DEFINE_string("arch", "FSRCNN", "Model name [FSRCNN]")
 flags.DEFINE_boolean("fast", False, "Use the fast model (FSRCNN-s) [False]")
 flags.DEFINE_integer("epoch", 10, "Number of epochs [10]")
 flags.DEFINE_integer("batch_size", 32, "The size of batch images [32]")
@@ -38,8 +39,8 @@ def main(_):
 
 
   with tf.Session() as sess:
-    fsrcnn = FSRCNN(sess, config=FLAGS)
-    fsrcnn.run()
+    model = Model(sess, config=FLAGS)
+    model.run()
     
 if __name__ == '__main__':
   tf.app.run()

@@ -276,13 +276,13 @@ def test_input_setup(config):
 
   return nx, ny
 
-def save_params(sess, d, s, m):
+def save_params(sess, params):
   param_dir = "params/"
 
   if not os.path.exists(param_dir):
     os.makedirs(param_dir)
 
-  h = open(param_dir + "weights{}_{}_{}.txt".format(d, s, m), 'w')
+  h = open(param_dir + "weights{}.txt".format('_'.join(str(i) for i in params)), 'w')
 
   variables = dict((var.name, sess.run(var)) for var in tf.trainable_variables())
 
