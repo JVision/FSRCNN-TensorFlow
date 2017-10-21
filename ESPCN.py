@@ -1,4 +1,5 @@
 import tensorflow as tf
+from utils import tf_ms_ssim
 
 class Model(object):
 
@@ -51,3 +52,7 @@ class Model(object):
     alphas = tf.get_variable('alpha{}'.format(i), _x.get_shape()[-1], initializer=tf.constant_initializer(0.2), dtype=tf.float32)
 
     return tf.nn.relu(_x) - alphas * tf.nn.relu(-_x)
+
+  def loss(self, Y, X):
+    ssim = tf_ms_ssim(Y, X, level=2)
+    return (1 - ssim) / 2

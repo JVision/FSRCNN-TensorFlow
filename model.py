@@ -5,9 +5,7 @@ from utils import (
   test_input_setup,
   save_params,
   merge,
-  array_image_save,
-  tf_ssim,
-  tf_ms_ssim
+  array_image_save
 )
 
 import time
@@ -69,9 +67,7 @@ class Model(object):
     model_dir = "%s_%s_%s_%s" % (self.model.name.lower(), self.label_size, '-'.join(str(i) for i in self.model.model_params), "r"+str(self.radius))
     self.model_dir = os.path.join(self.checkpoint_dir, model_dir)
 
-    # Loss function (structural dissimilarity)
-    ssim = tf_ms_ssim(self.labels, self.pred, level=2)
-    self.loss = (1 - ssim) / 2
+    self.loss = self.model.loss(self.labels, self.pred)
 
     self.saver = tf.train.Saver()
 

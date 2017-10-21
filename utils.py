@@ -401,3 +401,58 @@ def tf_ms_ssim(img1, img2, level=3, sigma=1.5):
     value = tf.reduce_prod(tf.pow(mcs, weight)) * tf.pow(ml[level-1], weight[level-1])
 
     return value
+
+def bilinear_upsample_weights(factor, channels):
+    """
+    Create weights matrix for transposed convolution with bilinear filter
+    initialization.
+    """
+    filter_size = 2 * factor
+    center = factor - (1 if factor % 2 == 1 else 0.5)
+    og = np.ogrid[:filter_size, :filter_size]
+    upsample_kernel = (1 - abs(og[0] - center) / factor) * (1 - abs(og[1] - center) / factor)
+    weights = np.zeros((filter_size, filter_size, channels, channels), dtype=np.float32)
+    for i in range(channels):
+        weights[:, :, i, i] = upsample_kernel
+    return weights
+
+def bicubic_kernel(x, a=-0.5):
+    """https://clouard.users.greyc.fr/Pantheon/experiments/rescaling/index-en.html#bicubic"""
+    if abs(x) <= 1:
+      return (a + 2)*abs(x)**3 - (a + 3)*abs(x)**2 + 1
+    elif 1 < abs(x) and abs(x) < 2:
+      return a*abs(x)**3 - 5*a*abs(x)**2 + 8*a*abs(x) - 4*a
+    else:
+      return 0
+
+def build_filter(factor, channels=1):
+    size = factor * 4
+    k = np.zeros((size), dtype=np.float32)
+    for i in range(size):
+        x = (1 / factor) * (i - np.floor(size / 2) + 0.5)
+        k[i] = bicubic_kernel(x)
+    k = k / np.sum(k)
+    k = np.outer(k, k)
+    weights = np.zeros((size, size, channels, channels), dtype=np.float32)
+    for i in range(channels):
+        weights[:, :, i, i] = k
+    return weights
+
+def bicubic_downsample(x, factor):
+    """Downsample x by a factor of factor, using the filter built by build_filter()
+    x: a rank 4 tensor with format NHWC
+    factor: downsampling factor (ex: factor=2 means the output size is (h/2, w/2))
+    """
+    # using padding calculations from https://www.tensorflow.org/api_guides/python/nn#Convolution
+    kernel_size = factor * 4
+    padding = kernel_size - factor
+    pad_top = padding // 2
+    pad_bottom = padding - pad_top
+    pad_left = padding // 2
+    pad_right = padding - pad_left
+    # apply mirror padding
+    x = tf.pad(x, [[0,0], [pad_top,pad_bottom], [pad_left,pad_right], [0,0]], mode='REFLECT')
+    # downsampling performed by strided conv
+    x = tf.contrib.layers.conv2d(x, 1, kernel_size, factor, 'VALID', 'NHWC', activation_fn=None, trainable=False,
+        weights_initializer=tf.constant_initializer(build_filter(factor=factor), dtype=tf.float32), biases_initializer=None)
+    return x
