@@ -1,24 +1,26 @@
 import tensorflow as tf
-from utils import tf_ssim
+from utils import tf_ssim, bilinear_upsample_weights
 
 class Model(object):
 
   def __init__(self, config):
     self.name = "FSRCNN"
     # Different model layer counts and filter sizes for FSRCNN vs FSRCNN-s (fast), (d, s, m) in paper
-    model_params = [[56, 12, 4], [32, 8, 1]]
-    self.model_params = model_params[config.fast]
+    model_params = [32, 0, 4, 1]
+    self.GRL = True # global residual learning
+    self.model_params = model_params
     self.scale = config.scale
     self.radius = config.radius
     self.padding = config.padding
     self.images = config.images
     self.batch = config.batch
+    self.image_size = config.image_size - self.padding
     self.label_size = config.label_size
     self.c_dim = config.c_dim
 
   def model(self):
 
-    d, s, m = self.model_params
+    d, s, m, _ = self.model_params
 
     # Feature Extraction
     size = self.padding + 1
@@ -58,6 +60,15 @@ class Model(object):
     deconv_stride = [1,  self.scale, self.scale, 1]
     deconv = tf.nn.conv2d_transpose(conv, deconv_weights, output_shape=deconv_output, strides=deconv_stride, padding='SAME', data_format='NHWC')
     deconv = tf.nn.bias_add(deconv, deconv_biases, data_format='NHWC')
+
+    if self.GRL:
+        # Deconvolution 2
+        upsample_filter = bilinear_upsample_weights(self.scale, self.c_dim)
+        self.biases['b{}'.format(m + 5)] = tf.get_variable('b{}'.format(m + 5), initializer=tf.constant(1, shape=[1]))
+        deconv_output = [self.batch, self.label_size, self.label_size, self.c_dim]
+        deconv_stride = [1, self.scale, self.scale, 1]
+        img = tf.image.resize_image_with_crop_or_pad(self.images, self.image_size, self.image_size)
+        deconv += tf.nn.conv2d_transpose(img, upsample_filter, output_shape=deconv_output, strides=deconv_stride, padding='SAME')
 
     return deconv
 
