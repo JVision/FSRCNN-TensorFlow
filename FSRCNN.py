@@ -20,7 +20,7 @@ class Model(object):
 
   def model(self):
 
-    d, s, m, _ = self.model_params
+    d, s, m, r = self.model_params
 
     # Feature Extraction
     size = self.padding + 1
@@ -39,11 +39,14 @@ class Model(object):
       s = d
 
     # Mapping (# mapping layers = m)
-    for i in range(3, m + 3):
-      weights = tf.get_variable('w{}'.format(i), shape=[3, 3, s, s], initializer=tf.variance_scaling_initializer())
-      biases = tf.get_variable('b{}'.format(i), initializer=tf.zeros([s]))
-      conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-      conv = self.prelu(tf.nn.bias_add(conv, biases, data_format='NHWC'), i)
+    with tf.variable_scope("mapping_block") as scope:
+        for ri in range(r):
+          for i in range(3, m + 3):
+            weights = tf.get_variable('w{}'.format(i), shape=[3, 3, s, s], initializer=tf.variance_scaling_initializer())
+            biases = tf.get_variable('b{}'.format(i), initializer=tf.zeros([s]))
+            conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
+            conv = self.prelu(tf.nn.bias_add(conv, biases, data_format='NHWC'), i)
+          scope.reuse_variables()
 
     # Expanding
     if self.model_params[1] > 0:
