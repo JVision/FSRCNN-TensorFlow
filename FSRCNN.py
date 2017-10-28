@@ -26,34 +26,42 @@ class Model(object):
     size = self.padding + 1
     weights = tf.get_variable('w1', shape=[size, size, 1, d], initializer=tf.variance_scaling_initializer())
     biases = tf.get_variable('b1', initializer=tf.zeros([d]))
-    conv = tf.nn.conv2d(self.images, weights, strides=[1,1,1,1], padding='VALID', data_format='NHWC')
-    conv = self.prelu(tf.nn.bias_add(conv, biases, data_format='NHWC'), 1)
+    features = tf.nn.conv2d(self.images, weights, strides=[1,1,1,1], padding='VALID', data_format='NHWC')
+    features = tf.nn.bias_add(features, biases, data_format='NHWC')
 
     # Shrinking
     if self.model_params[1] > 0:
+      features = self.prelu(features, 1)
       weights = tf.get_variable('w2', shape=[1, 1, d, s], initializer=tf.variance_scaling_initializer())
       biases = tf.get_variable('b2', initializer=tf.zeros([s]))
-      conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-      conv = self.prelu(tf.nn.bias_add(conv, biases, data_format='NHWC'), 2)
+      features = tf.nn.conv2d(features, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
+      features = tf.nn.bias_add(features, biases, data_format='NHWC')
     else:
       s = d
 
+    conv = features
     # Mapping (# mapping layers = m)
     with tf.variable_scope("mapping_block") as scope:
         for ri in range(r):
           for i in range(3, m + 3):
             weights = tf.get_variable('w{}'.format(i), shape=[3, 3, s, s], initializer=tf.variance_scaling_initializer())
             biases = tf.get_variable('b{}'.format(i), initializer=tf.zeros([s]))
+            if i > 3:
+              conv = self.prelu(conv, i)
             conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-            conv = self.prelu(tf.nn.bias_add(conv, biases, data_format='NHWC'), i)
+            conv = tf.nn.bias_add(conv, biases, data_format='NHWC')
+            if i == m + 2:
+              conv = tf.add(conv, features)
           scope.reuse_variables()
+    conv = self.prelu(conv, 2)
 
     # Expanding
     if self.model_params[1] > 0:
       expand_weights = tf.get_variable('w{}'.format(m + 3), shape=[1, 1, s, d], initializer=tf.variance_scaling_initializer())
       expand_biases = tf.get_variable('b{}'.format(m + 3), initializer=tf.zeros([d]))
       conv = tf.nn.conv2d(conv, expand_weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-      conv = self.prelu(tf.nn.bias_add(conv, expand_biases, data_format='NHWC'), m + 3)
+      conv = tf.nn.bias_add(conv, expand_biases, data_format='NHWC')
+      conv = self.prelu(conv, m + 3)
 
     # Deconvolution
     deconv_size = self.radius * self.scale * 2 + 1

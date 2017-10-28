@@ -27,6 +27,9 @@ def read_weights(file_name, ln, size=1):
 
     return [x.strip() for x in content]
 
+def format_weights(weights, n):
+    return ",".join(['{:.16f}'.format(float(i)) for i in weights.strip(",").split(",")[n:n+4]])
+
 def base_header(file):
     file.write('//!HOOK LUMA\n')
     file.write('//!WHEN OUTPUT.w LUMA.w / {0}.400 > OUTPUT.h LUMA.h / {0}.400 > *\n'.format(scale - 1))
@@ -35,14 +38,16 @@ def header1(file, n, d):
     base_header(file)
     file.write('//!DESC feature map {}\n'.format((n//4)%(d//4) + 1))
     file.write('//!BIND LUMA\n')
-    file.write('//!SAVE MODEL{}\n'.format((n//4)%(d//4) + 1))
+    file.write('//!SAVE FEATURE{}\n'.format((n//4)%(d//4) + 1))
     file.write('//!COMPONENTS 4\n')
 
 def header2(file, r, mi, m, n, s):
     base_header(file)
     file.write('//!DESC mapping {}_{}\n'.format(mi + 1, (n//4)%(s//4) + 1))
     for i in range(s//4):
-        file.write('//!BIND MODEL{}\n'.format(i+1 + (0 if (r * m + mi) % 2 == 0 else 20)))
+        file.write('//!BIND {}{}\n'.format("FEATURE" if r == 0 and mi == 0 else "MODEL", i+1 + (0 if (r * m + mi) % 2 == 0 else 20)))
+    if mi == m-1 and (mi+1)*(r+1) > 1:
+        file.write('//!BIND FEATURE{}\n'.format((n//4)%(s//4) + 1))
     file.write('//!SAVE MODEL{}\n'.format((n//4)%(s//4) + 1 + (20 if (r * m + mi) % 2 == 0 else 0)))
     file.write('//!COMPONENTS 4\n')
 
@@ -79,19 +84,16 @@ def main():
         weights = read_weights(fname, ln, (feature_radius*2+1)**2)
         ln = get_line_number("b1", fname)
         biases = read_weights(fname, ln)
-        ln = get_line_number("alpha1", fname)
-        alphas = read_weights(fname, ln)
         for n in range(0, d, 4):
             header1(file, n, d)
             file.write('vec4 hook()\n')
             file.write('{\n')
-            file.write('vec4 res = vec4({});\n'.format(",".join(biases[0].strip(",").split(",")[n:n+4])))
+            file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
             p = 0
             for l in range(0, len(weights)):
                 y, x = p%(feature_radius*2+1)-feature_radius, p//(feature_radius*2+1)-feature_radius
                 p += 1
-                file.write('res += vec4({}) * float(LUMA_texOff(vec2({},{})));\n'.format(",".join(weights[l].strip(",").split(",")[n:n+4]), x, y))
-            file.write('res = mix(res, vec4({}) * res, lessThan(res, vec4(0.0)));\n'.format(",".join(alphas[0].strip(",").split(",")[n:n+4])))
+                file.write('res += vec4({}) * float(LUMA_texOff(vec2({},{})));\n'.format(format_weights(weights[l], n), x, y))
             file.write('return res;\n')
             file.write('}\n\n')
 
@@ -102,25 +104,30 @@ def main():
                 weights = read_weights(fname, ln, s*9)
                 ln = get_line_number("b{}".format(mi + 3), fname)
                 biases = read_weights(fname, ln)
-                ln = get_line_number("alpha{}".format(mi + 3), fname)
-                alphas = read_weights(fname, ln)
                 for n in range(0, s, 4):
-                    header2(file, mi, n, s)
+                    header2(file, ri, mi, m, n, s)
                     file.write('vec4 hook()\n')
                     file.write('{\n')
-                    file.write('vec4 res = vec4({});\n'.format(",".join(biases[0].strip(",").split(",")[n:n+4])))
+                    file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
                     p = 0
                     for l in range(0, len(weights), 4):
                         if l % s == 0:
                             y, x = p%3-1, p//3-1
                             p += 1
-                        file.write('res += mat4({},{},{},{}) * vec4(MODEL{}_texOff(vec2({},{})));\n'.format(
-                                    ",".join(weights[l].strip(",").split(",")[n:n+4]),
-                                    ",".join(weights[l+1].strip(",").split(",")[n:n+4]),
-                                    ",".join(weights[l+2].strip(",").split(",")[n:n+4]),
-                                    ",".join(weights[l+3].strip(",").split(",")[n:n+4]),
-                                    (l//4)%(s//4) + 1 + (20 if (ri * m + mi) % 2 == 1 else 0), x, y))
-                    file.write('res = mix(res, vec4({}) * res, lessThan(res, vec4(0.0)));\n'.format(",".join(alphas[0].strip(",").split(",")[n:n+4])))
+                        idx = (l//4)%(s//4)
+                        file.write('res += mat4({},{},{},{}) * {}{}_texOff(vec2({},{}));\n'.format(
+                                    format_weights(weights[l], n), format_weights(weights[l+1], n),
+                                    format_weights(weights[l+2], n), format_weights(weights[l+3], n),
+                                    "FEATURE" if ri == 0 and mi == 0 else "MODEL",
+                                    idx + 1 + (20 if (ri * m + mi) % 2 == 1 else 0), x, y))
+                    ln = get_line_number("alpha{}".format(3 if mi == m - 1 else mi + 4), fname)
+                    alphas = read_weights(fname, ln)
+                    if mi == m - 1:
+                        file.write('res += {}{}_texOff(0);\n'.format(inp, (n//4)%(s//4) + 1))
+                        if ri == r - 1:
+                            ln = get_line_number("alpha2", fname)
+                            alphas = read_weights(fname, ln)
+                    file.write('res = max(res, vec4(0.0)) + vec4({}) * min(res, vec4(0.0));\n'.format(format_weights(alphas[0], n)))
                     file.write('return res;\n')
                     file.write('}\n\n')
 
@@ -159,7 +166,7 @@ def main():
                         s1 = radius*2+1 if j == 0 and dsize % 2 == 1 else radius*2
                         for xi, x in enumerate(range(-radius + (0 if j == 0 and dsize % 2 == 1 else 1), radius + 1)):
                             l = yi * s1 + xi
-                            file.write('dot(vec4({}), MODEL{}_texOff(vec2({},{}))){}\n'.format(",".join(sort[l+total].strip(",").split(",")[n:n+4]),
+                            file.write('dot(vec4({}), MODEL{}_texOff(vec2({},{}))){}\n'.format(format_weights(sort[l+total], n),
                                         (n//4)%(d//4) + 1 + (20 if (r * m) % 2 == 1 else 0), x, y, ';' if l == s1 * s2 - 1 else '+'))
                     total = total + l + 1
             file.write('return res;\n')
