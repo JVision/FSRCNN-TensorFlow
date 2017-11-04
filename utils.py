@@ -8,7 +8,7 @@ import h5py
 from math import ceil
 import subprocess
 import io
-from random import randrange
+from random import randrange, shuffle
 
 import tensorflow as tf
 from PIL import Image
@@ -35,7 +35,7 @@ def read_data(path):
     label = np.array(hf.get('label'))
     return data, label
 
-def preprocess(path, scale=3, distort=False):
+def preprocess(path, scale=3, distort=False, expand=0):
   """
   Preprocess single image file
     (1) Read original image
@@ -50,6 +50,15 @@ def preprocess(path, scale=3, distort=False):
     (width, height) = image.size
 
     if downsample:
+        if expand==1:
+            image = image.rotate([90, 180, 270][randrange(3)])
+        elif expand==2:
+            downscale = [0.9, 0.8, 0.7, 0.6][randrange(4)]
+            image = image.resize((int(width * downscale), int(height * downscale)), Image.BICUBIC)
+        elif expand==3:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT if randrange(2)==0 else Image.FLIP_TOP_BOTTOM)
+
+        (width, height) = image.size
         image = image.crop((0, 0, width - width % scale, height - height % scale))
 
         (width, height) = image.size
@@ -80,6 +89,13 @@ def preprocess(path, scale=3, distort=False):
         img.alpha_channel = False
         img.transform_colorspace("ycbcr")
         if downsample:
+            if expand==1:
+                img.rotate([90, 180, 270][randrange(3)])
+            elif expand==2:
+                downscale = [0.9, 0.8, 0.7, 0.6][randrange(4)]
+                img.resize(width = int(img.width * downscale), height = int(img.height * downscale), filter = "mitchell")
+            elif expand==3:
+                img.flip() if randrange(2)==0 else img.flop()
             img.crop(width = img.width - img.width % scale, height = img.height - img.height % scale)
             label_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
             img.resize(width = img.width // scale, height = img.height // scale, filter = "lanczos2", blur=1.0)
@@ -104,11 +120,14 @@ def prepare_data(sess, dataset):
     For train dataset, output data would be ['.../t1.bmp', '.../t2.bmp', ..., '.../t99.bmp']
   """
   if FLAGS.train:
-    filenames = os.listdir(dataset)
     data_dir = os.path.join(os.getcwd(), dataset)
+    data = []
+    for files in ('*.bmp', '*.png'):
+        data.extend(glob.glob(os.path.join(data_dir, files)))
+    shuffle(data)
   else:
     data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset)), "Set5")
-  data = sorted(glob.glob(os.path.join(data_dir, "*.bmp")))
+    data = sorted(glob.glob(os.path.join(data_dir, "*.bmp")))
 
   return data
 
@@ -152,24 +171,25 @@ def train_input_worker(args):
 
   single_input_sequence, single_label_sequence = [], []
 
-  input_, label_ = preprocess(image_data, scale, distort=distort)
+  for j in range(4):
+    input_, label_ = preprocess(image_data, scale, distort=distort, expand=j)
 
-  if len(input_.shape) == 3:
-    h, w, _ = input_.shape
-  else:
-    h, w = input_.shape
+    if len(input_.shape) == 3:
+      h, w, _ = input_.shape
+    else:
+      h, w = input_.shape
 
-  for x in range(0, h - image_size + 1, stride):
-    for y in range(0, w - image_size + 1, stride):
-      sub_input = input_[x : x + image_size, y : y + image_size]
-      x_loc, y_loc = x + padding, y + padding
-      sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
+    for x in range(0, h - image_size + 1, stride):
+      for y in range(0, w - image_size + 1, stride):
+        sub_input = input_[x : x + image_size, y : y + image_size]
+        x_loc, y_loc = x + padding, y + padding
+        sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
 
-      sub_input = sub_input.reshape([image_size, image_size, 1])
-      sub_label = sub_label.reshape([label_size, label_size, 1])
+        sub_input = sub_input.reshape([image_size, image_size, 1])
+        sub_label = sub_label.reshape([label_size, label_size, 1])
       
-      single_input_sequence.append(sub_input)
-      single_label_sequence.append(sub_label)
+        single_input_sequence.append(sub_input)
+        single_label_sequence.append(sub_label)
 
   return [single_input_sequence, single_label_sequence]
 
@@ -244,24 +264,25 @@ def train_input_setup(config):
   sub_input_sequence, sub_label_sequence = [], []
 
   for i in range(len(data)):
-    input_, label_ = preprocess(data[i], scale, distort=config.distort)
+    for j in range(4):
+      input_, label_ = preprocess(data[i], scale, distort=config.distort, expand=j)
 
-    if len(input_.shape) == 3:
-      h, w, _ = input_.shape
-    else:
-      h, w = input_.shape
+      if len(input_.shape) == 3:
+        h, w, _ = input_.shape
+      else:
+        h, w = input_.shape
 
-    for x in range(0, h - image_size + 1, stride):
-      for y in range(0, w - image_size + 1, stride):
-        sub_input = input_[x : x + image_size, y : y + image_size]
-        x_loc, y_loc = x + padding, y + padding
-        sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
+      for x in range(0, h - image_size + 1, stride):
+        for y in range(0, w - image_size + 1, stride):
+          sub_input = input_[x : x + image_size, y : y + image_size]
+          x_loc, y_loc = x + padding, y + padding
+          sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
 
-        sub_input = sub_input.reshape([image_size, image_size, 1])
-        sub_label = sub_label.reshape([label_size, label_size, 1])
+          sub_input = sub_input.reshape([image_size, image_size, 1])
+          sub_label = sub_label.reshape([label_size, label_size, 1])
         
-        sub_input_sequence.append(sub_input)
-        sub_label_sequence.append(sub_label)
+          sub_input_sequence.append(sub_input)
+          sub_label_sequence.append(sub_label)
 
   arrdata = np.asarray(sub_input_sequence)
   arrlabel = np.asarray(sub_label_sequence)
