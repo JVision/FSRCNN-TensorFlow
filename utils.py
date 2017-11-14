@@ -4,7 +4,6 @@ Scipy version > 0.18 is needed, due to 'mode' option from scipy.misc.imread func
 
 import os
 import glob
-import h5py
 from math import ceil
 import subprocess
 import io
@@ -19,23 +18,7 @@ FLAGS = tf.app.flags.FLAGS
 
 downsample = True
 
-def read_data(path):
-  """
-  Read h5 format data file
-  
-  Args:
-    path: file path of desired file
-
-  Returns:
-    data: '.h5' file format that contains train data values
-    label: '.h5' file format that contains train label values
-  """
-  with h5py.File(path, 'r') as hf:
-    data = np.array(hf.get('data'))
-    label = np.array(hf.get('label'))
-    return data, label
-
-def preprocess(path, scale=3, distort=False, expand=0):
+def preprocess(path, scale=3, distort=False):
   """
   Preprocess single image file
     (1) Read original image
@@ -50,15 +33,6 @@ def preprocess(path, scale=3, distort=False, expand=0):
     (width, height) = image.size
 
     if downsample:
-        if expand==1:
-            image = image.rotate([90, 180, 270][randrange(3)])
-        elif expand==2:
-            downscale = [0.9, 0.8, 0.7, 0.6][randrange(4)]
-            image = image.resize((int(width * downscale), int(height * downscale)), Image.BICUBIC)
-        elif expand==3:
-            image = image.transpose(Image.FLIP_LEFT_RIGHT if randrange(2)==0 else Image.FLIP_TOP_BOTTOM)
-
-        (width, height) = image.size
         image = image.crop((0, 0, width - width % scale, height - height % scale))
 
         (width, height) = image.size
@@ -89,13 +63,6 @@ def preprocess(path, scale=3, distort=False, expand=0):
         img.alpha_channel = False
         img.transform_colorspace("ycbcr")
         if downsample:
-            if expand==1:
-                img.rotate([90, 180, 270][randrange(3)])
-            elif expand==2:
-                downscale = [0.9, 0.8, 0.7, 0.6][randrange(4)]
-                img.resize(width = int(img.width * downscale), height = int(img.height * downscale), filter = "mitchell")
-            elif expand==3:
-                img.flip() if randrange(2)==0 else img.flop()
             img.crop(width = img.width - img.width % scale, height = img.height - img.height % scale)
             label_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
             img.resize(width = img.width // scale, height = img.height // scale, filter = "lanczos2", blur=1.0)
@@ -131,20 +98,6 @@ def prepare_data(sess, dataset):
 
   return data
 
-def make_data(sess, checkpoint_dir, data, label):
-  """
-  Make input data as h5 file format
-  Depending on 'train' (flag value), savepath would be changed.
-  """
-  if FLAGS.train:
-    savepath = os.path.join(os.getcwd(), '{}/train.h5'.format(checkpoint_dir))
-  else:
-    savepath = os.path.join(os.getcwd(), '{}/test.h5'.format(checkpoint_dir))
-
-  with h5py.File(savepath, 'w') as hf:
-    hf.create_dataset('data', data=data)
-    hf.create_dataset('label', data=label)
-
 def modcrop(image, scale=3):
   """
   To scale down and up the original image, first thing to do is to have no remainder while scaling operation.
@@ -171,25 +124,24 @@ def train_input_worker(args):
 
   single_input_sequence, single_label_sequence = [], []
 
-  for j in range(4):
-    input_, label_ = preprocess(image_data, scale, distort=distort, expand=j)
+  input_, label_ = preprocess(image_data, scale, distort=distort)
 
-    if len(input_.shape) == 3:
-      h, w, _ = input_.shape
-    else:
-      h, w = input_.shape
+  if len(input_.shape) == 3:
+    h, w, _ = input_.shape
+  else:
+    h, w = input_.shape
 
-    for x in range(0, h - image_size + 1, stride):
-      for y in range(0, w - image_size + 1, stride):
-        sub_input = input_[x : x + image_size, y : y + image_size]
-        x_loc, y_loc = x + padding, y + padding
-        sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
+  for x in range(0, h - image_size + 1, stride):
+    for y in range(0, w - image_size + 1, stride):
+      sub_input = input_[x : x + image_size, y : y + image_size]
+      x_loc, y_loc = x + padding, y + padding
+      sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
 
-        sub_input = sub_input.reshape([image_size, image_size, 1])
-        sub_label = sub_label.reshape([label_size, label_size, 1])
+      sub_input = sub_input.reshape([image_size, image_size, 1])
+      sub_label = sub_label.reshape([label_size, label_size, 1])
       
-        single_input_sequence.append(sub_input)
-        single_label_sequence.append(sub_label)
+      single_input_sequence.append(sub_input)
+      single_label_sequence.append(sub_label)
 
   return [single_input_sequence, single_label_sequence]
 
@@ -244,8 +196,7 @@ def thread_train_setup(config):
   arrdata = np.asarray(sub_input_sequence)
   arrlabel = np.asarray(sub_label_sequence)
 
-  make_data(sess, config.checkpoint_dir, arrdata, arrlabel)
-
+  return (arrdata, arrlabel)
 
 def train_input_setup(config):
   """
@@ -264,31 +215,29 @@ def train_input_setup(config):
   sub_input_sequence, sub_label_sequence = [], []
 
   for i in range(len(data)):
-    for j in range(4):
-      input_, label_ = preprocess(data[i], scale, distort=config.distort, expand=j)
+    input_, label_ = preprocess(data[i], scale, distort=config.distort)
 
-      if len(input_.shape) == 3:
-        h, w, _ = input_.shape
-      else:
-        h, w = input_.shape
+    if len(input_.shape) == 3:
+      h, w, _ = input_.shape
+    else:
+      h, w = input_.shape
 
-      for x in range(0, h - image_size + 1, stride):
-        for y in range(0, w - image_size + 1, stride):
-          sub_input = input_[x : x + image_size, y : y + image_size]
-          x_loc, y_loc = x + padding, y + padding
-          sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
+    for x in range(0, h - image_size + 1, stride):
+      for y in range(0, w - image_size + 1, stride):
+        sub_input = input_[x : x + image_size, y : y + image_size]
+        x_loc, y_loc = x + padding, y + padding
+        sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
 
-          sub_input = sub_input.reshape([image_size, image_size, 1])
-          sub_label = sub_label.reshape([label_size, label_size, 1])
+        sub_input = sub_input.reshape([image_size, image_size, 1])
+        sub_label = sub_label.reshape([label_size, label_size, 1])
         
-          sub_input_sequence.append(sub_input)
-          sub_label_sequence.append(sub_label)
+        sub_input_sequence.append(sub_input)
+        sub_label_sequence.append(sub_label)
 
   arrdata = np.asarray(sub_input_sequence)
   arrlabel = np.asarray(sub_label_sequence)
 
-  make_data(sess, config.checkpoint_dir, arrdata, arrlabel)
-
+  return (arrdata, arrlabel)
 
 def test_input_setup(config):
   """
@@ -329,9 +278,7 @@ def test_input_setup(config):
   arrdata = np.asarray(sub_input_sequence)
   arrlabel = np.asarray(sub_label_sequence)
 
-  make_data(sess, config.checkpoint_dir, arrdata, arrlabel)
-
-  return nx, ny
+  return (arrdata, arrlabel, nx, ny)
 
 def save_params(sess, params):
   param_dir = "params/"
