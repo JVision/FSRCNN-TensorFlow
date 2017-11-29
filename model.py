@@ -26,6 +26,7 @@ class Model(object):
     self.arch = config.arch
     self.fast = config.fast
     self.train = config.train
+    self.adversarial = config.adversarial
     self.epoch = config.epoch
     self.scale = config.scale
     self.radius = config.radius
@@ -58,24 +59,54 @@ class Model(object):
     # Batch size differs in training vs testing
     self.batch = tf.placeholder(tf.int32, shape=[], name='batch')
 
-    model = importlib.import_module(self.arch)
-    self.model = model.Model(self)
+    with tf.variable_scope('generator'):
+        model = importlib.import_module(self.arch)
+        self.model = model.Model(self)
 
-    self.pred = self.model.model()
+        self.pred = self.model.model()
 
     model_dir = "%s_%s_%s_%s" % (self.model.name.lower(), self.label_size, '-'.join(str(i) for i in self.model.model_params), "r"+str(self.radius))
     self.model_dir = os.path.join(self.checkpoint_dir, model_dir)
 
     self.loss = self.model.loss(self.labels, self.pred)
 
-    self.saver = tf.train.Saver()
+    if self.adversarial and self.train and not self.params:
+        from discriminator import discriminator
+        with tf.variable_scope('discriminator', reuse=False):
+            discrim_fake_output = discriminator(self.pred)
+        with tf.variable_scope('discriminator', reuse=True):
+            discrim_real_output = discriminator(self.labels)
+
+        avg_fake = tf.reduce_mean(discrim_fake_output)
+        avg_real = tf.reduce_mean(discrim_real_output)
+        real_tilde = tf.nn.sigmoid(discrim_real_output - avg_fake)
+        fake_tilde = tf.nn.sigmoid(discrim_fake_output - avg_real)
+        self.discrim_loss = - tf.reduce_mean(tf.log(real_tilde + 1e-12)) - tf.reduce_mean(tf.log(1 - fake_tilde + 1e-12))
+        self.adversarial_loss = - tf.reduce_mean(tf.log(fake_tilde + 1e-12)) - tf.reduce_mean(tf.log(1 - real_tilde + 1e-12))
+
+        self.dis_saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator'))
+
+    self.saver = tf.train.Saver(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='generator'))
 
   def run(self):
     global_step = tf.Variable(0, trainable=False)
-    optimizer = tf.train.AdamOptimizer(self.learning_rate)
+    optimizer = tf.train.AdamOptimizer(self.learning_rate, beta1=0.5)
     deconv_mult = lambda grads: list(map(lambda x: (x[0] * 1.0, x[1]) if 'deconv' in x[1].name else x, grads))
-    grads = deconv_mult(optimizer.compute_gradients(self.loss))
-    self.train_op = optimizer.apply_gradients(grads, global_step=global_step)
+    if self.adversarial and self.train and not self.params:
+        with tf.variable_scope('dicriminator_train'):
+            discrim_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+            discrim_grads = optimizer.compute_gradients(self.discrim_loss, discrim_tvars)
+            discrim_train = optimizer.apply_gradients(discrim_grads)
+
+        with tf.variable_scope('generator_train'):
+            # Need to wait discriminator to perform train step
+            with tf.control_dependencies([discrim_train] + tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+                gen_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+                gen_grads = deconv_mult(optimizer.compute_gradients(self.loss + 5e-3 * self.adversarial_loss, gen_tvars))
+                self.train_op = optimizer.apply_gradients(gen_grads, global_step=global_step)
+    else:
+        grads = deconv_mult(optimizer.compute_gradients(self.loss))
+        self.train_op = optimizer.apply_gradients(grads, global_step=global_step)
 
     tf.global_variables_initializer().run()
 
@@ -184,6 +215,10 @@ class Model(object):
     self.saver.save(self.sess,
                     os.path.join(self.model_dir, model_name),
                     global_step=step)
+    if self.adversarial:
+        self.dis_saver.save(self.sess,
+                        os.path.join(os.path.join(self.model_dir, "discriminator"), "discriminator.model"),
+                        global_step=step)
 
   def load(self):
     print(" [*] Reading checkpoints...")
@@ -192,6 +227,10 @@ class Model(object):
     if ckpt and ckpt.model_checkpoint_path:
         ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
         self.saver.restore(self.sess, os.path.join(self.model_dir, ckpt_name))
+        ckpt = tf.train.get_checkpoint_state(os.path.join(self.model_dir, "discriminator"))
+        if self.adversarial and self.train and not self.params and ckpt and ckpt.model_checkpoint_path:
+            ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
+            self.dis_saver.restore(self.sess, os.path.join(os.path.join(self.model_dir, "discriminator"), ckpt_name))
         return True
     else:
         return False
