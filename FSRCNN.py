@@ -51,22 +51,27 @@ class Model(object):
             conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
             conv = tf.nn.bias_add(conv, biases, data_format='NHWC')
             if i == m + 2:
+              conv = self.prelu(conv, m + 3)
+              weights = tf.get_variable('w{}'.format(m + 3), shape=[1, 1, s, s], initializer=tf.variance_scaling_initializer())
+              biases = tf.get_variable('b{}'.format(m + 3), initializer=tf.zeros([s]))
+              conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
+              conv = tf.nn.bias_add(conv, biases, data_format='NHWC')
               conv = tf.add(conv, features)
           scope.reuse_variables()
     conv = self.prelu(conv, 2)
 
     # Expanding
     if self.model_params[1] > 0:
-      expand_weights = tf.get_variable('w{}'.format(m + 3), shape=[1, 1, s, d], initializer=tf.variance_scaling_initializer())
-      expand_biases = tf.get_variable('b{}'.format(m + 3), initializer=tf.zeros([d]))
+      expand_weights = tf.get_variable('w{}'.format(m + 4), shape=[1, 1, s, d], initializer=tf.variance_scaling_initializer())
+      expand_biases = tf.get_variable('b{}'.format(m + 4), initializer=tf.zeros([d]))
       conv = tf.nn.conv2d(conv, expand_weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
       conv = tf.nn.bias_add(conv, expand_biases, data_format='NHWC')
-      conv = self.prelu(conv, m + 3)
+      conv = self.prelu(conv, m + 4)
 
     # Deconvolution
     deconv_size = self.radius * self.scale * 2 + 1
-    deconv_weights = tf.get_variable('w{}'.format(m + 4), shape=[deconv_size, deconv_size, 1, d], initializer=tf.variance_scaling_initializer(scale=0.01))
-    deconv_biases = tf.get_variable('b{}'.format(m + 4), initializer=tf.zeros([1]))
+    deconv_weights = tf.get_variable('w{}'.format(m + 5), shape=[deconv_size, deconv_size, 1, d], initializer=tf.variance_scaling_initializer(scale=0.01))
+    deconv_biases = tf.get_variable('b{}'.format(m + 5), initializer=tf.zeros([1]))
     deconv_output = [self.batch, self.label_size, self.label_size, self.c_dim]
     deconv_stride = [1,  self.scale, self.scale, 1]
     deconv = tf.nn.conv2d_transpose(conv, deconv_weights, output_shape=deconv_output, strides=deconv_stride, padding='SAME', data_format='NHWC')
@@ -75,7 +80,7 @@ class Model(object):
     if self.GRL:
         # Deconvolution 2
         upsample_filter = bilinear_upsample_weights(self.scale, self.c_dim)
-        self.biases['b{}'.format(m + 5)] = tf.get_variable('b{}'.format(m + 5), initializer=tf.constant(1, shape=[1]))
+        self.biases['b{}'.format(m + 6)] = tf.get_variable('b{}'.format(m + 6), initializer=tf.constant(1, shape=[1]))
         deconv_output = [self.batch, self.label_size, self.label_size, self.c_dim]
         deconv_stride = [1, self.scale, self.scale, 1]
         img = tf.image.resize_image_with_crop_or_pad(self.images, self.image_size, self.image_size)
