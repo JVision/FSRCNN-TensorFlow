@@ -69,7 +69,11 @@ class Model(object):
     self.saver = tf.train.Saver()
 
   def run(self):
-    self.train_op = tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
+    global_step = tf.Variable(0, trainable=False)
+    optimizer = tf.train.AdamOptimizer(self.learning_rate)
+    deconv_mult = lambda grads: list(map(lambda x: (x[0] * 1.0, x[1]) if 'deconv' in x[1].name else x, grads))
+    grads = deconv_mult(optimizer.compute_gradients(self.loss))
+    self.train_op = optimizer.apply_gradients(grads, global_step=global_step)
 
     tf.global_variables_initializer().run()
 

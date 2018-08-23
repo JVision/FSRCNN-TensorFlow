@@ -1,12 +1,8 @@
 import sys
 from itertools import islice
-from utils import bilinear_upsample_weights
-import numpy as np
 
 scale = 2
 radius = 1
-
-dsize = radius * scale * 2 + 1
 
 def get_line_number(phrase, file_name):
     with open(file_name) as f:
@@ -74,23 +70,20 @@ def header4(file, s, m, r, n, d):
     file.write('//!SAVE EXPANDED{}\n'.format((n//4)%(d//4) + 1))
     file.write('//!COMPONENTS 4\n')
 
-def header5(file, m, r, n, d, inp):
+def header5(file, d, inp):
     base_header(file)
-    file.write('//!DESC sub-pixel convolution {}\n'.format((n//4)%(d//4) + 1))
-    file.write('//!BIND {}{}\n'.format(inp, (n//4)%(d//4) + 1))
-    file.write('//!SAVE {}{}\n'.format(inp, (n//4)%(d//4) + 1))
+    file.write('//!DESC sub-pixel convolution\n')
+    for i in range(d//4):
+        file.write('//!BIND {}{}\n'.format(inp, i + 1))
+    file.write('//!SAVE {}1\n'.format(inp))
     file.write('//!COMPONENTS 4\n')
 
-def header6(file, m, r, d, inp, grl):
+def header6(file, inp):
     base_header(file)
     file.write('//!WIDTH LUMA.w {} *\n'.format(scale))
     file.write('//!HEIGHT LUMA.h {} *\n'.format(scale))
     file.write('//!DESC aggregation\n')
-    if grl:
-        file.write('//!BIND HOOKED\n')
-    for i in range(d//4):
-        file.write('//!BIND {}{}\n'.format(inp, i + 1))
-    file.write('//!OFFSET -{}.0 -{}.0\n'.format(scale//2, scale//2))
+    file.write('//!BIND {}1\n'.format(inp))
 
 def main():
   if len(sys.argv) == 2:
@@ -217,89 +210,37 @@ def main():
                 file.write('}\n\n')
 
         # Sub-pixel convolution
-        ln = get_line_number("w{}".format(m + 5), fname)
-        weights = read_weights(fname, ln, dsize**2)
-
-        x=list(reversed(range(scale)))
-        if dsize % 2 == 1:
-            x=x[-1:]+x[:-1]
-        xy = []
-        for i in x:
-            for j in x:
-                xy.append([j, i])
-
-        id = []
-        for i in range(0, len(xy)):
-            xi, yi = xy[i]
-            for y in range(yi, dsize, scale):
-                for x in range(xi, dsize, scale):
-                    id.append(y + x * dsize)
-
-        weights = list(reversed(weights))
-        sort = [weights[id[l]].strip(",") for l in range(0, len(id))]
-        inp = "EXPANDED" if shrinking else "RES"
-        for n in range(0, d, 4):
-            header5(file, m, r, n, d, inp)
-            file.write('vec4 hook()\n')
-            file.write('{\n')
-            file.write('vec4 res = vec4(0);\n')
-            total = 0
-            for i in range(scale):
-                for j in range(scale):
-                    file.write('res[{}] +=\n'.format(i * scale + j))
-                    s2 = radius*2+1 if i == 0 and dsize % 2 == 1 else radius*2
-                    for yi, y in enumerate(range(-radius + (0 if i == 0 and dsize % 2 == 1 else 1), radius + 1)):
-                        s1 = radius*2+1 if j == 0 and dsize % 2 == 1 else radius*2
-                        for xi, x in enumerate(range(-radius + (0 if j == 0 and dsize % 2 == 1 else 1), radius + 1)):
-                            l = yi * s1 + xi
-                            file.write('dot(vec4({}), {}{}_texOff(vec2({},{}))){}\n'.format(format_weights(sort[l+total], n), inp,
-                                        (n//4)%(d//4) + 1, x, y, ';' if l == s1 * s2 - 1 else '+'))
-                    total = total + l + 1
-            file.write('return res;\n')
-            file.write('}\n\n')
-
-        # Aggregation
-        ln = get_line_number("b{}".format(m + 5), fname)
+        ln = get_line_number("deconv_w", fname)
+        weights = read_weights(fname, ln, d*(radius*2+1)**2)
+        ln = get_line_number("deconv_b", fname)
         biases = read_weights(fname, ln)
-        grl = get_line_number("b{}".format(m + 6), fname)
-        header6(file, m, r, d, inp, grl)
+        inp = "EXPANDED" if shrinking else "RES"
+        header5(file, d, inp)
         file.write('vec4 hook()\n')
         file.write('{\n')
-        file.write('float res = {};\n'.format(float(biases[0])))
+        file.write('vec4 res = vec4({});\n'.format(biases[0]))
+        for n in range(0, scale**2, 4):
+            p = 0
+            for l in range(0, len(weights), 4):
+                if l % d == 0:
+                    y, x = p%(radius*2+1)-radius, p//(radius*2+1)-radius
+                    p += 1
+                idx = (l//4)%(d//4)
+                file.write('res += mat4({},{},{},{}) * {}{}_texOff(vec2({},{}));\n'.format(
+                           format_weights(weights[l], n), format_weights(weights[l+1], n),
+                           format_weights(weights[l+2], n), format_weights(weights[l+3], n),
+                           inp, idx + 1, x, y))
+        file.write('return res;\n')
+        file.write('}\n\n')
+
+        # Aggregation
+        header6(file, inp)
+        file.write('vec4 hook()\n')
+        file.write('{\n')
         file.write('vec2 fcoord = fract({}1_pos * {}1_size);\n'.format(inp, inp))
         file.write('vec2 base = {}1_pos + (vec2(0.5) - fcoord) * {}1_pt;\n'.format(inp, inp))
         file.write('ivec2 index = ivec2(fcoord * vec2({}));\n'.format(scale))
-        file.write('res += (')
-        for i in range(d//4):
-            if i > 0:
-                file.write('+')
-            file.write('{}{}_tex(base)'.format(inp, i + 1))
-        file.write(')[index.y * {} + index.x];\n'.format(scale))
-
-        if grl:
-            weights = bilinear_upsample_weights(scale, 1).ravel(order='F')
-            x=list(reversed(range(scale)))
-            xy = []
-            for i in x:
-                for j in x:
-                    xy.append([j, i])
-            id = []
-            for i in range(len(xy)):
-                xi, yi = xy[i]
-                for y in range(yi, scale * 2, scale):
-                    for x in range(xi, scale * 2, scale):
-                        id.append(y + x * (scale * 2))
-            sort = [weights[id[l]] for l in range(0, len(id))]
-            file.write('vec4 img = vec4(0);\n')
-            for i in range(scale):
-                for j in range(scale):
-                    idx = i * scale + j
-                    file.write('img[{}] =\n'.format(idx))
-                    file.write('{} * HOOKED_tex(base + HOOKED_pt * vec2(0,0)).r+\n'.format(sort[idx * 4]))
-                    file.write('{} * HOOKED_tex(base + HOOKED_pt * vec2(1,0)).r+\n'.format(sort[idx * 4 + 1]))
-                    file.write('{} * HOOKED_tex(base + HOOKED_pt * vec2(0,1)).r+\n'.format(sort[idx * 4 + 2]))
-                    file.write('{} * HOOKED_tex(base + HOOKED_pt * vec2(1,1)).r;\n'.format(sort[idx * 4 + 3]))
-            file.write('res += img[index.y * {} + index.x];\n'.format(scale))
+        file.write('float res = {}1_tex(base)[index.x * {} + index.y];\n'.format(inp, scale))
         file.write('return vec4(res, 0, 0, 1);\n')
         file.write('}\n')
 
