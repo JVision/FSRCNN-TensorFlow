@@ -12,7 +12,6 @@ class Model(object):
     self.images = config.images
     self.batch = config.batch
     self.label_size = config.label_size
-    self.c_dim = config.c_dim
 
   def model(self):
     d = self.model_params

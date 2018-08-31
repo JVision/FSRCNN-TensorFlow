@@ -26,8 +26,6 @@ class Model(object):
     self.arch = config.arch
     self.fast = config.fast
     self.train = config.train
-    self.c_dim = config.c_dim
-    self.is_grayscale = (self.c_dim == 1)
     self.epoch = config.epoch
     self.scale = config.scale
     self.radius = config.radius
@@ -51,8 +49,12 @@ class Model(object):
 
 
   def init_model(self):
-    self.images = tf.placeholder(tf.float32, [None, self.image_size, self.image_size, self.c_dim], name='images')
-    self.labels = tf.placeholder(tf.float32, [None, self.label_size, self.label_size, self.c_dim], name='labels')
+    if self.train:
+        self.images = tf.placeholder(tf.float32, [None, self.image_size, self.image_size, 1], name='images')
+        self.labels = tf.placeholder(tf.float32, [None, self.label_size, self.label_size, 1], name='labels')
+    else:
+        self.images = tf.placeholder(tf.float32, [None, None, None, 1], name='images')
+        self.labels = tf.placeholder(tf.float32, [None, None, None, 1], name='labels')
     # Batch size differs in training vs testing
     self.batch = tf.placeholder(tf.int32, shape=[], name='batch')
 
@@ -154,20 +156,24 @@ class Model(object):
 
   
   def run_test(self):
-    test_data, test_label, nx, ny = test_input_setup(self)
+    test_data, test_label = test_input_setup(self)
 
     print("Testing...")
 
     start_time = time.time()
-    result = self.pred.eval({self.images: test_data, self.labels: test_label, self.batch: nx * ny})
-    print("Took %.3f seconds" % (time.time() - start_time))
+    result = np.clip(self.pred.eval({self.images: test_data, self.labels: test_label, self.batch: 1}), 0, 1)
+    passed = time.time() - start_time
+    img1 = tf.convert_to_tensor(test_label, dtype=tf.float32)
+    img2 = tf.convert_to_tensor(result, dtype=tf.float32)
+    psnr = self.sess.run(tf.image.psnr(img1, img2, 1))
+    ssim = self.sess.run(tf.image.ssim(img1, img2, 1))
+    print("Took %.3f seconds, PSNR: %.6f, SSIM: %.6f" % (passed, psnr, ssim))
 
-    result = merge(result, [nx, ny, self.c_dim])
-    result = result.squeeze()
+    result = merge(self, result)
     image_path = os.path.join(os.getcwd(), self.output_dir)
     image_path = os.path.join(image_path, "test_image.png")
 
-    array_image_save(result * 255, image_path)
+    array_image_save(result, image_path)
 
   def save(self, step):
     model_name = self.model.name + ".model"

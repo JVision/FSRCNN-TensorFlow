@@ -240,45 +240,48 @@ def train_input_setup(config):
   return (arrdata, arrlabel)
 
 def test_input_setup(config):
-  """
-  Read image files, make their sub-images, and save them as a h5 file format.
-  """
   sess = config.sess
-  image_size, label_size, stride, scale, padding = config.image_size, config.label_size, config.stride, config.scale, config.padding // 2
 
   # Load data path
   data = prepare_data(sess, dataset="Test")
 
-  sub_input_sequence, sub_label_sequence = [], []
-
-  pic_index = 2 # Index of image based on lexicographic order in data folder
-  input_, label_ = preprocess(data[pic_index], config.scale)
+  input_, label_ = preprocess(data[2], config.scale)
 
   if len(input_.shape) == 3:
     h, w, _ = input_.shape
   else:
     h, w = input_.shape
 
-  nx, ny = 0, 0
-  for x in range(0, h - image_size + 1, stride):
-    nx += 1
-    ny = 0
-    for y in range(0, w - image_size + 1, stride):
-      ny += 1
-      sub_input = input_[x : x + image_size, y : y + image_size]
-      x_loc, y_loc = x + padding, y + padding
-      sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
+  arrdata = np.pad(input_.reshape([1, h, w, 1]), ((0,0),(2,2),(2,2),(0,0)), 'reflect')
 
-      sub_input = sub_input.reshape([image_size, image_size, 1])
-      sub_label = sub_label.reshape([label_size, label_size, 1])
+  if len(label_.shape) == 3:
+    h, w, _ = label_.shape
+  else:
+    h, w = label_.shape
 
-      sub_input_sequence.append(sub_input)
-      sub_label_sequence.append(sub_label)
+  arrlabel = label_.reshape([1, h, w, 1])
 
-  arrdata = np.asarray(sub_input_sequence)
-  arrlabel = np.asarray(sub_label_sequence)
+  return (arrdata, arrlabel)
 
-  return (arrdata, arrlabel, nx, ny)
+def merge(config, Y):
+  """
+  Merges super-resolved image with chroma components
+  """
+  h, w = Y.shape[1], Y.shape[2]
+  Y = Y.reshape(h, w, 1) * 255
+  Y = Y.round().astype(np.uint8)
+
+  data = prepare_data(config.sess, dataset="Test")
+  src = Image.open(data[2]).convert('YCbCr')
+  (width, height) = src.size
+  if downsample is False:
+    src = src.resize((width * config.scale, height * config.scale), Image.BICUBIC)
+    (width, height) = src.size
+  CbCr = np.frombuffer(src.tobytes(), dtype=np.uint8).reshape(height, width, 3)[:,:,1:]
+
+  img = np.concatenate((Y, CbCr), axis=-1)
+
+  return img
 
 def save_params(sess, params):
   param_dir = "params/"
@@ -313,24 +316,11 @@ def save_params(sess, params):
 
   h.close()
 
-def merge(images, size):
-  """
-  Merges sub-images back into original image size
-  """
-  h, w = images.shape[1], images.shape[2]
-  img = np.zeros((h * size[0], w * size[1], size[2]))
-  for idx, image in enumerate(images):
-    i = idx % size[1]
-    j = idx // size[1]
-    img[j*h:j*h+h, i*w:i*w+w, :] = image
-
-  return img
-
 def array_image_save(array, image_path):
   """
   Converts np array to image and saves it
   """
-  image = Image.fromarray(array)
+  image = Image.fromarray(array, 'YCbCr')
   if image.mode != 'RGB':
     image = image.convert('RGB')
   image.save(image_path)

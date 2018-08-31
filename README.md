@@ -3,7 +3,7 @@ TensorFlow implementation of the Fast Super-Resolution Convolutional Neural Netw
 
 ## Prerequisites
  * Python 3
- * TensorFlow-gpu >= 1.3
+ * TensorFlow-gpu >= 1.8
  * CUDA & cuDNN >= 6.0
  * Pillow
  * ImageMagick (optional)
