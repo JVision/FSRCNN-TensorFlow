@@ -52,4 +52,8 @@ class Model(object):
     return tf.nn.relu(_x) - alphas * tf.nn.relu(-_x)
 
   def loss(self, Y, X):
-    return tf.reduce_mean(tf.sqrt(tf.square(X - Y) + 1e-6)) + (1.0 - tf_ssim(Y, X)) * 0.5
+    dY = tf.image.sobel_edges(Y)
+    dX = tf.image.sobel_edges(X)
+    M = tf.sqrt(tf.square(dY[:,:,:,:,0]) + tf.square(dY[:,:,:,:,1]))
+    return tf.losses.absolute_difference(dY, dX) \
+         + tf.losses.absolute_difference((1.0 - M) * Y, (1.0 - M) * X, weights=2.0)
